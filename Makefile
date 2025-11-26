@@ -129,3 +129,34 @@ partC:
 	@mkdir -p $(RAW_DIR) $(FIG_DIR)
 	$(PY) -m src_cli.partc_log_prop26 --alpha $(ALPHA) --t $(TVALS) --n 100 500 1000 --M 400 --seed $(SEED) --base $(BASE)
 	$(PY) -m src_cli.partc_figures_prop26 --csv $(RAW_DIR)/prop26_M400_L50000_a$(ALPHA)_seed$(SEED)_$(BASE).csv --title "Proposition 2.6: α=$(ALPHA), base=$(BASE)"
+
+profile-parta:
+	@mkdir -p results
+	python -m cProfile -o results/profile_parta_n1000_M4000_N2000.pstats \
+	  -m src_cli.parta_panels \
+	    --base $(BASE) \
+	    --t $(TVALS) \
+	    --alpha 1 5 20 \
+	    --n 1000 \
+	    --M 4000 \
+	    --N 2000 \
+	    --seed $(SEED)
+
+# ---- Profiling: Part C (Prop 2.6 continuation) ----
+profile-partc:
+	@mkdir -p results
+	$(PY) -m cProfile \
+	  -o results/profile_partc_base$(BASE)_alpha$(ALPHA)_n$(N).pstats \
+	  -m src_cli.partc_log_prop26 \
+	    --alpha $(ALPHA) \
+	    --base $(BASE) \
+	    --t $(TVALS) \
+	    --n $(N) \
+	    --M 200 \
+	    --L 50000 \
+	    --level 0.95 \
+	    --seed $(SEED)
+
+
+complexity-parta:
+	python -m scripts.complexity_parta
