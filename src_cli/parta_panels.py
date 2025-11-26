@@ -28,33 +28,51 @@ def panel_for_n(n: int, ts: list[float], alphas: list[float], M: int, N: int, ba
     """
     rng = np.random.default_rng(seed)
     # Initialize model with first α (will be reassigned inside the loop).
-    model = PolyaSequenceModel(alpha=alphas[0], base=base, rng=rng)  # alpha reassigned below
+    model = PolyaSequenceModel(alpha=alphas[0], base=base, rng=rng)
+
     # Observed prefix x_{1:n} used for all panels (same dataset across the grid).
     x_obs = build_prefix(n, model)
+    x_obs_arr = np.asarray(x_obs, dtype=float) if len(x_obs) > 0 else np.empty(0, dtype=float)
+
+    # Precompute posterior/prior draws of mass P((−∞, t]) for all (t, α) cells.
+    # Key optimization: for each α and Monte Carlo replicate we simulate ONE Pólya path
+    # and reuse it across all thresholds ts, instead of resimulating per (t, α) cell.
+    R, C = len(ts), len(alphas)
+    post_all = np.empty((R, C, N), dtype=float)
+
+    for j, a in enumerate(alphas):
+        # Update α for this column (reuse same model/RNG).
+        model.alpha = a
+        for r in range(N):
+            # Continue the same prefix once to length M.
+            traj = continue_urn_once(x_obs, model, M)
+            traj_arr = np.asarray(traj, dtype=float)
+
+            # For this trajectory, compute empirical mass at EACH t.
+            # This reuses the same simulated path for all thresholds.
+            for i, t in enumerate(ts):
+                post_all[i, j, r] = np.mean(traj_arr <= t)
 
     # Figure layout: rows correspond to thresholds t, columns correspond to α.
-    R, C = len(ts), len(alphas)
     fig, axes = plt.subplots(R, C, figsize=(12, 8), sharex=True, sharey=False)
     axes = np.atleast_2d(axes)  # normalize shape for R=C=1 case
 
     for i, t in enumerate(ts):
         # Sufficient statistic at threshold t: K_n(t) = #{x_i ≤ t} over the prefix.
-        k_n = sum(1 for x in x_obs if x <= t)
+        if x_obs_arr.size:
+            k_n = np.sum(x_obs_arr <= t)
+        else:
+            k_n = 0
 
         for j, a in enumerate(alphas):
-            # Update α for this column (reuse same model/RNG).
-            model.alpha = a
-            # Monte Carlo: continue the *same* prefix N times up to length M,
-            # record the empirical mass at t for each continuation.
-            post = np.empty(N, dtype=float)
-            for r in range(N):
-                traj = continue_urn_once(x_obs, model, M)
-                post[r] = np.mean(np.asarray(traj) <= t)
+            # Posterior/prior draws for this (t, α) cell.
+            post = post_all[i, j, :]
 
             ax = axes[i, j]
             x = np.linspace(0, 1, 600)
             # Conjugate Beta overlay parameters for indicators 1{x ≤ t}.
-            a_post, b_post = a*t + k_n, a*(1 - t) + (n - k_n)
+            a_post = a * t + k_n
+            b_post = a * (1 - t) + (n - k_n)
 
             # Histogram (posterior/prior draws of mass at t) + Beta overlay + reference line t.
             ax.hist(post, bins=50, density=True, alpha=0.8, edgecolor="none")
@@ -94,8 +112,6 @@ def panel_for_n(n: int, ts: list[float], alphas: list[float], M: int, N: int, ba
     fig.savefig(Path(out).with_suffix('.pdf'))
     plt.close(fig)
     print(f"[ok] wrote {out}")
-
-
 def main():
     """CLI entry point: build posterior panels for a grid of (t, α)."""
     ap = argparse.ArgumentParser(description="Panels of posterior via Pólya continuation.")
