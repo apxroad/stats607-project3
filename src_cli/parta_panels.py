@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from src.plotstyle import apply_plot_style
 from scipy.stats import beta
 from src.polya import PolyaSequenceModel, build_prefix, continue_urn_once
+FIG_DIR = Path("results") / "figures"
 
 def panel_for_n(n: int, ts: list[float], alphas: list[float], M: int, N: int, base: str, seed: int):
     """Render a grid of panels showing distributions of P((−∞, t]) via Pólya continuation.
@@ -107,7 +108,9 @@ def panel_for_n(n: int, ts: list[float], alphas: list[float], M: int, N: int, ba
     fig.tight_layout(rect=[0.08, 0.08, 1.0, 0.90])
 
     # Save PNG + PDF variants; mirror existing naming convention.
-    out = f"results/figures/post_panels_cont_n{n}_M{M}_N{N}_{base}.png"
+    FIG_DIR.mkdir(parents=True, exist_ok=True)
+    
+    out = FIG_DIR / f"post_panels_cont_n{n}_M{M}_N{N}_{base}.png"
     fig.savefig(out, dpi=140)
     fig.savefig(Path(out).with_suffix('.pdf'))
     plt.close(fig)
