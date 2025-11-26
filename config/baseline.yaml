@@ -1,0 +1,28 @@
+# ===== Baseline experiment (i.i.d. Normal, no drift) =====
+truth: "Normal(0,1)"          # oracle distribution F
+n: [1000, 5000]               # stream lengths
+reps: 10                      # start small; can scale later
+
+grid:
+  J: 100                      # number of grid points
+  tmin: -4.0                  # grid range [tmin, tmax]
+  tmax:  4.0
+
+methods:                      # to be implemented in Phases 3–4
+  - empirical_ecdf            # running empirical CDF (baseline)
+  - normal_plugin             # plug-in Normal (mu_hat, sigma_hat)
+  - student_t_conjugate       # conjugate t predictive (Normal–IG)
+
+metrics:                      # what to record during simulation
+  record_every: 50            # compute distances every 50 steps
+  pit: true
+  distances: [d_infty, d_rmse]
+  log_score: false            # set true after we expose pdf_est()
+
+io:
+  raw_dir: "results/raw"
+  fig_dir: "results/figures"
+
+seeding:
+  base: 20251018              # global base seed
+  rule: "seed = base + 1000*n + rep"   # deterministic per cell/rep

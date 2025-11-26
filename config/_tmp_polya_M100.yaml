@@ -1,0 +1,29 @@
+truth: G0
+n:
+- 100
+- 500
+- 1000
+reps: 100
+grid:
+  J: 100
+  tmin: 0.0
+  tmax: 1.0
+methods:
+- polya_dp
+method_params:
+  polya_dp:
+    alpha: 5.0
+    base: uniform
+metrics:
+  record_every: 50
+  pit: true
+  distances:
+  - d_infty
+  - d_rmse
+  log_score: false
+io:
+  raw_dir: results/raw_M100
+  fig_dir: results/figures_M100
+seeding:
+  base: 20251018
+  rule: seed = base + 1000*n + rep

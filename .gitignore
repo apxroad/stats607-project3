@@ -1,0 +1,73 @@
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+results/raw/
+results/figures/
+figures/
+.vscode/
+.idea/
+results/raw/
+results/figures/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+
+results/
+# generated
+results/raw/*
+results/figures/*
+results/polya_checks*.csv
+!.gitkeep
+# caches and results
+__pycache__/
+.pytest_cache/
+results/
+*.zip
+
+# editor/OS
+.DS_Store
+.vscode/
+
+# ad-hoc backups & temp
+*.bak
+*.bak_*
+*.bak.*
+*.broken
+*.prepit
+*~
+# editor/backup junk
+*~
+*.swp
+.DS_Store
+
+# temp/backup files
+*.bak
+*.bak2
+*.orig
+*.rej
+*.prepit
+*.broken
+
+# build/outputs
+results/
+__pycache__/
+.pytest_cache/
+# backup/temp files
+*.bak
+*.bak2
+*.orig
+*.rej
+*.prepit
+*.broken
+Makefile.backup.*
+Makefile.before-aliases.*
+Makefile.broken.*
+results/
+__pycache__/
+*.parquet
+*.png
+*.pdf
+analysis.md

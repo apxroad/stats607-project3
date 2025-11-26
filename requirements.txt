@@ -1,0 +1,7 @@
+# Requires Python >= 3.12
+numpy
+pandas
+PyYAML
+matplotlib
+fastparquet
+scipy
