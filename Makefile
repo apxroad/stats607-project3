@@ -11,6 +11,8 @@ BASE    := uniform
 ALPHA   := 5.0
 N       := 1000
 TVALS   := 0.25 0.5 0.75
+# Number of worker processes for parallel Part C
+WORKERS ?= 4
 
 # Part A panel ns (include 0 for the "prior" panel)
 PARTA_NS := 0 100 500 1000
@@ -130,6 +132,22 @@ partC:
 	$(PY) -m src_cli.partc_log_prop26 --alpha $(ALPHA) --t $(TVALS) --n 100 500 1000 --M 400 --seed $(SEED) --base $(BASE)
 	$(PY) -m src_cli.partc_figures_prop26 --csv $(RAW_DIR)/prop26_M400_L50000_a$(ALPHA)_seed$(SEED)_$(BASE).csv --title "Proposition 2.6: α=$(ALPHA), base=$(BASE)"
 
+.PHONY: parallel-partc
+parallel-partc:
+	@mkdir -p $(RAW_DIR) $(FIG_DIR)
+	$(PY) -m src_cli.partc_log_prop26 \
+	  --alpha $(ALPHA) \
+	  --t $(TVALS) \
+	  --n 100 500 1000 \
+	  --M 400 \
+	  --seed $(SEED) \
+	  --base $(BASE) \
+	  --workers $(WORKERS)
+	$(PY) -m src_cli.partc_figures_prop26 \
+	  --csv $(RAW_DIR)/prop26_M400_L50000_a$(ALPHA)_seed$(SEED)_$(BASE).csv \
+	  --title "Proposition 2.6: α=$(ALPHA), base=$(BASE) (parallel)"
+
+
 profile-parta:
 	@mkdir -p results
 	python -m cProfile -o results/profile_parta_n1000_M4000_N2000.pstats \
@@ -157,6 +175,42 @@ profile-partc:
 	    --level 0.95 \
 	    --seed $(SEED)
 
+
+
+.PHONY: profile complexity benchmark parallel stability-check perf-figures complexity-partc
+
+# Run profiling on representative simulations
+profile: profile-parta profile-partc
+
+# Computational complexity analysis (Part A baseline vs optimized, and Part C)
+complexity:
+	$(PY) -m scripts.complexity_parta_compare
+	$(PY) -m scripts.complexity_partc_L
+
+# Part C-only complexity (shortcut)
+complexity-partc:
+	$(PY) -m scripts.complexity_partc_L
+
+# Benchmark baseline vs optimized runtimes (A, B, C, All)
+benchmark:
+	$(PY) -m scripts.benchmark_runtime
+
+# Optimized version with parallelization (Part C)
+parallel:
+	$(MAKE) parallel-partc
+
+# Check for numerical warnings / NaNs / infs in selected scenarios
+stability-check:
+	$(PY) -m scripts.stability_check
+
+# Build performance comparison figures
+# (re-runs complexity + benchmark so everything is fresh)
+perf-figures: complexity benchmark
+	$(PY) -m scripts.plot_performance
+
+.PHONY: regression
+regression:
+	pytest -q tests/test_regression_unit3.py
 
 complexity-parta:
 	python -m scripts.complexity_parta

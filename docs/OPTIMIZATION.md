@@ -26,7 +26,7 @@ These observations suggested that Part A is a good candidate for:
 
 ### 1.2 Approach
 
-The Part A CLI `src_cli.parta_panels` draws Pólya continuations and, for each cell of the panel, estimates posterior probabilities of events of the form \((-\infty, t]\) for a small grid of thresholds `ts`.
+The Part A CLI `src_cli.parta_panels` draws Pólya continuations and, for each cell of the panel, estimates posterior probabilities of events of the form $(-\infty, t]$ for a small grid of thresholds `ts`.
 
 In the **baseline** implementation, for each fixed sample size `n`, the panel was constructed roughly as:
 
@@ -54,7 +54,7 @@ In the **optimized** implementation, we reuse each trajectory across *all* thres
 
 Later, in the plotting loop, we simply slice `post_all[i, j, :]` to get the posterior draws for each panel cell – no additional Pólya simulations or repeated `np.asarray` calls are needed.
 
-We also made a minor array-level improvement in the computation of the prefix statistic \(k_n\) at each threshold:
+We also made a minor array-level improvement in the computation of the prefix statistic $k_n$ at each threshold:
 
 - We convert the observed prefix to a NumPy array once, `x_obs_arr = np.asarray(x_obs)`, and compute `np.sum(x_obs_arr <= t)` for each `t`, instead of applying Python loops.
 
@@ -62,11 +62,11 @@ Crucially, we did **not** change:
 
 - The graphical layout, binning, or overlay of Beta densities.
 - The definition of the posterior panels.
-- The random seed behavior: we still seed once at the beginning of the CLI.
+- The random seed behaviour: we still seed once at the beginning of the CLI.
 
 Thus, the optimized version produces panels that are visually indistinguishable from the baseline, but with considerably less redundant Pólya simulation.
 
-### 1.3 Code changes (before vs after)
+### 1.3 Code changes
 
 The core idea can be summarized as:
 
@@ -106,38 +106,31 @@ for i, t in enumerate(ts):
 
 The actual implementation also includes some book-keeping for axes, titles, and file naming; those aspects are unchanged relative to the baseline.
 
-### 1.4 Performance impact
+### 1.4 Performance impact – Part A only
 
-We re-ran the **complexity experiment** for Part A using the same command and values of `n` as in the baseline, after swapping in the optimized `parta_panels.py`:
+We re-ran the **complexity experiment** for Part A using the same command and values of `n` as in the baseline, after swapping in the optimized `parta_panels.py` and the Unit-3 comparison script:
 
 ```bash
-make complexity-parta
-# which calls:
-python -m scripts.complexity_parta
+make complexity        # now calls both Part A & Part C complexity scripts
+# Part A numbers come from:
+python -m scripts.complexity_parta_compare
 ```
 
 The script reports:
 
-- `n = 100`: time ≈ 21.496 s  
-- `n = 300`: time ≈ 20.428 s  
-- `n = 600`: time ≈ 19.010 s  
-- `n = 1000`: time ≈ 16.844 s  
+- `n = 100`: baseline ≈ 62.20 s, optimized ≈ 22.04 s  
+- `n = 300`: baseline ≈ 58.71 s, optimized ≈ 21.26 s  
+- `n = 600`: baseline ≈ 54.72 s, optimized ≈ 19.82 s  
+- `n = 1000`: baseline ≈ 51.22 s, optimized ≈ 17.14 s  
 
-Comparing to the **baseline** times (from `BASELINE.md`):
-
-- `n = 100`: 62.365 s  
-- `n = 300`: 57.513 s  
-- `n = 600`: 53.418 s  
-- `n = 1000`: 47.248 s  
-
-we obtain the following summary:
+Summarising:
 
 | n     | Baseline runtime (s) | Optimized runtime (s) | Speedup (baseline / optimized) |
 |-------|----------------------|------------------------|---------------------------------|
-| 100   | 62.365               | 21.496                | ≈ 2.9×                          |
-| 300   | 57.513               | 20.428                | ≈ 2.8×                          |
-| 600   | 53.418               | 19.010                | ≈ 2.8×                          |
-| 1000  | 47.248               | 16.844                | ≈ 2.8×                          |
+| 100   | 62.20                | 22.04                 | ≈ 2.8×                          |
+| 300   | 58.71                | 21.26                 | ≈ 2.8×                          |
+| 600   | 54.72                | 19.82                 | ≈ 2.8×                          |
+| 1000  | 51.22                | 17.14                 | ≈ 3.0×                          |
 
 Key observations:
 
@@ -176,48 +169,381 @@ Overall, this optimization provides a large speedup with minimal conceptual comp
 
 ---
 
-## 2. Optimization 2 – Part C (parallelization)
+## 2. Optimization 2 – Part C (parallelisation)
 
-> TODO: Fill in after implementing the Part C parallelization:
-> - Problem summary from `BASELINE.md` (Pólya continuation complexity O(M × L), `draw_polya_next` dominating).
-> - Description of the parallel design and implementation.
-> - Before/after snippets of the continuation loop.
-> - Timing table and speedup vs number of cores.
-> - Discussion of trade-offs (e.g., seed management, CPU utilization).
+### 2.1 Problem (from baseline profiling)
+
+Baseline profiling of the Part C CLI `src_cli.partc_log_prop26` (see `BASELINE.md`) showed:
+
+- The simulation performs **Pólya urn continuation** to approximate the predictive distribution $\tilde F(t)$ in Proposition 2.6.
+- For a typical configuration (`M = 200`, `L = 50,000`, `n = 1000`, `alpha = 5`, uniform base), we observed:
+  - ≈ 31.5M function calls in ≈ 13.5 seconds.
+  - `draw_polya_next` was called ≈ 10.2M times (roughly `M × L`), accounting for **≈ 9.45 seconds** (~70% of runtime).
+- Overheads from Python list appends and `len` calls were small relative to `draw_polya_next`.
+- There is essentially **no Matplotlib cost** in this profiling run; the time is spent almost entirely in simulation.
+
+Each replication and each `n` value is **independent**, and the dominant cost is a large number of identical “continuation” draws. This makes Part C a natural candidate for **parallelisation across replications**.
+
+### 2.2 Approach
+
+We refactored the inner logic of `src_cli.partc_log_prop26` into a worker function `_simulate_one_rep` that handles a single `(n, rep)` pair:
+
+- For a given sample size `n` and replication index `rep`, the worker:
+  1. Initializes a local RNG with a deterministic seed derived from `(n, rep, global_seed)`.
+  2. Generates the prefix $x_1,\dots,x_n$ from the Pólya urn, keeping track of:
+     - $K_m(t)$ = number of samples ≤ $t$ up to time $m$,
+     - $P_m(t)$ = predictive probabilities,
+     - the accumulated variance term $V_{n,t}$ via
+       $$
+       V_{n,t} = \frac{1}{n} \sum_{m=1}^n m^2 (P_m(t) - P_{m-1}(t))^2.
+       $$
+  3. Computes $P_n(t)$ for each threshold.
+  4. **Continues the same urn** by $L$ steps, accumulating
+       $$
+       \hat F(t) = \frac{1}{L}\sum_{\ell=1}^L \mathbf{1}\{x_{n+\ell} \le t\}.
+       $$
+  5. Forms the Wald interval $P_n(t) \pm z\sqrt{V_{n,t}/n}$, and records:
+     - coverage indicator (`covered`),
+     - interval width,
+     - other supporting quantities.
+
+The CLI builds a list of tasks:
+
+```python
+tasks = [
+    (n, rep, tvals, alpha, args.base, args.L, args.level, args.seed, z)
+    for n in nvals
+    for rep in range(args.M)
+]
+```
+
+and then chooses between **sequential** and **parallel** execution:
+
+- If `--workers <= 1`: fall back to a simple Python `for` loop over `tasks`.
+- If `--workers > 1`:
+  - Determine the number of workers `n_workers` (treat `--workers 0` as “use all cores”).
+  - Create a `multiprocessing.Pool(processes=n_workers)` and run:
+
+    ```python
+    with mp.Pool(processes=n_workers) as pool:
+        for result_rows in pool.imap_unordered(_simulate_one_rep, tasks):
+            rows.extend(result_rows)
+    ```
+
+The results from all tasks are collected into a single DataFrame and written to the same CSV filename pattern as in the baseline implementation.
+
+This design preserves the original interface while adding a simple `--workers` knob to control the degree of parallelism.
+
+### 2.3 Code changes
+
+Conceptually, the change can be summarised as:
+
+**Before (single-process loop):**
+
+```python
+rows = []
+for n in nvals:
+    for rep in range(M):
+        # simulate prefix x1..xn
+        # compute K_m(t), P_m(t), V_{n,t}
+        # continue urn by L steps to get Fhat(t)
+        # form CI and append rows for each t
+        rows.extend(rows_for_this_rep_and_n)
+df = pd.DataFrame(rows)
+df.to_csv(...)
+```
+
+**After (task list + optional multiprocessing):**
+
+```python
+tasks = [
+    (n, rep, tvals, alpha, base, L, level, seed, z)
+    for n in nvals
+    for rep in range(M)
+]
+
+rows = []
+
+if args.workers <= 1:
+    # sequential path
+    for task in tasks:
+        rows.extend(_simulate_one_rep(task))
+else:
+    n_workers = args.workers
+    if n_workers == 0:
+        n_workers = os.cpu_count() or 1
+    print(f"[parallel] Using {n_workers} worker processes for Part C.")
+    with mp.Pool(processes=n_workers) as pool:
+        for result_rows in pool.imap_unordered(_simulate_one_rep, tasks):
+            rows.extend(result_rows)
+
+df = pd.DataFrame(rows)
+df.to_csv(...)
+```
+
+The `_simulate_one_rep` worker uses the same Pólya update formula as the baseline code and the same seeding scheme, ensuring that each `(n, rep)` path is reproducible and conceptually identical to the sequential implementation.
+
+### 2.4 Performance impact and speedup
+
+We benchmarked Part C using the Makefile targets:
+
+- Sequential (1 worker):
+
+  ```bash
+  /usr/bin/time -p make partC
+  ```
+
+- Parallel (2 and 4 workers):
+
+  ```bash
+  /usr/bin/time -p make parallel-partc WORKERS=2
+  /usr/bin/time -p make parallel-partc WORKERS=4
+  ```
+
+with the default configuration:
+
+- `alpha = 5.0`
+- `base = uniform`
+- `t = 0.25 0.5 0.75`
+- `n = 100 500 1000`
+- `M = 400`
+- `L = 50,000`
+- `seed = 2025`
+
+The observed **wall-clock runtimes** (`real`) were:
+
+- `make partC` (workers=1): real ≈ **58.13 s**
+- `make parallel-partc WORKERS=2`: real ≈ **30.85 s**
+- `make parallel-partc WORKERS=4`: real ≈ **19.24 s**
+
+This yields the following table:
+
+| Workers | Command                               | Runtime (s) | Speedup vs 1 worker |
+|---------|---------------------------------------:|------------:|--------------------:|
+| 1       | `make partC`                           |      58.13  | 1.00×               |
+| 2       | `make parallel-partc WORKERS=2`        |      30.85  | ≈ 1.88×             |
+| 4       | `make parallel-partc WORKERS=4`        |      19.24  | ≈ 3.02×             |
+
+Comments:
+
+- The speedup is close to linear when going from 1 to 2 workers, and we still obtain a **~3× speedup** with 4 workers.
+- The `user` CPU time increases with the number of workers (e.g., ≈ 71.45 seconds for 4 workers), which is expected: more total CPU time is used, but elapsed wall-clock time decreases because the work is parallelised.
+- The parallel runs produce the **same CSV file** (same filename and columns) as the sequential implementation; only the route by which we arrive at the result differs.
+
+### 2.5 Trade-offs
+
+The main trade-offs introduced by this optimization are:
+
+- **Increased code complexity**:
+  - We now manage a task list and a multiprocessing pool instead of a simple nested loop.
+  - `_simulate_one_rep` must be kept in sync with any future changes to the Part C logic.
+
+- **Reproducibility and seeding**:
+  - Each `(n, rep)` uses a deterministic seed of the form `seed + 7919 * rep + 104729 * n`.  
+    This ensures that results are reproducible and independent of the number of workers or task scheduling order.
+  - The order in which rows appear in the CSV may differ (due to `imap_unordered`), but the set of rows is the same.
+
+- **Resource utilisation**:
+  - Using multiple workers increases CPU usage during the Part C run, which is desirable on a dedicated multicore machine but may contend with other processes on a shared laptop.
+  - There is minor overhead from process startup and inter-process communication, which prevents perfect linear speedup.
+
+Overall, this optimization substantially reduces wall-clock time for Part C — from about 58 seconds to about 19 seconds with 4 workers — without changing the scientific interpretation of the pooled-$Z$ results.
 
 ---
 
-## 3. (Optional) Optimization 3 – Numerical stability
+## 3. Complexity and benchmark scripts
 
-> TODO (if used):  
-> - Describe any clipping or log-transform changes added to improve numerical stability.
-> - Explain why they were needed (e.g., avoid log of 0, extreme probabilities).
-> - Show that they have negligible effect on the substantive conclusions.
+To make the performance study **reproducible**, we added several small scripts under `scripts/` and wired them into the `Makefile`:
+
+- `scripts.complexity_parta_compare` – Part A baseline vs optimised:
+
+  ```bash
+  make complexity     # runs Part A + Part C complexity
+  ```
+
+  - For Part A, this script times the **baseline** CLI
+    `src_cli.parta_panels_baseline_backup` and the **optimised** CLI
+    `src_cli.parta_panels` for `n ∈ {100, 300, 600, 1000}`.
+  - It writes `results/complexity_parta_compare.csv` with columns
+    `n, runtime_baseline, runtime_optimized`.
+
+- `scripts.complexity_partc_L` – Part C runtime vs continuation length $L$:
+
+  ```bash
+  make complexity     # also calls this script
+  ```
+
+  - Runs `src_cli.partc_log_prop26` (sequential, 1 worker) for
+    `L ∈ {10,000, 30,000, 50,000}` with the default configuration.
+  - Writes `results/complexity_partc_L.csv` with columns `L, runtime_sec`.
+
+- `scripts.benchmark_runtime` – component-wise baseline vs optimised timings:
+
+  ```bash
+  make benchmark
+  ```
+
+  - Runs:
+    - Part A baseline (Unit-2 panels),
+    - Part A optimised,
+    - Part B (single implementation),
+    - Part C sequential (workers=1),
+    - Part C parallel (workers=4),
+    and constructs “All” runtimes as sums.
+  - Writes `results/benchmark_runtime.csv` with columns
+    `component, variant, runtime_sec`, where `component ∈ {PartA, PartB, PartC, All}`
+    and `variant ∈ {baseline, optimized}` (only baseline exists for PartB).
+
+- `scripts.plot_performance` – builds performance figures from the CSVs:
+
+  ```bash
+  make perf-figures   # runs complexity + benchmark + this script
+  ```
+
+  - Reads both CSVs above and produces:
+    - `results/figures/perf_parta_runtime_vs_n.{png,pdf}`  
+      (complexity plot for Part A, baseline vs optimised).
+    - `results/figures/perf_components_baseline_vs_optimized.{png,pdf}`  
+      (bar chart of runtimes for Part A, Part C, and All).
+
+- `scripts.stability_check` – light numerical-stability sweep:
+
+  ```bash
+  make stability-check
+  ```
+
+  - Runs a small grid of Part B and Part C configurations and scans the
+    produced CSVs for `NaN`/`inf` values.
+  - Exits with status 0 if everything is numerically clean and 1 otherwise.
+
+Together with the updated `Makefile` targets (`profile`, `complexity`, `benchmark`, `parallel`, `stability-check`, `perf-figures`, `regression`), these scripts allow anyone to reproduce our performance study with a few simple commands.
 
 ---
 
-## 4. Regression testing and correctness
+## 4. Overall timing comparison (baseline vs optimised)
 
-Describe how we verified that the optimizations preserve the scientific conclusions.
+The file `results/benchmark_runtime.csv`, generated by `make benchmark`, summarises the end-to-end runtimes for each component and for the whole pipeline.
 
-### 4.1 Regression tests
+Using the default configuration (`BASE=uniform`, `ALPHA=5.0`, `N=1000`, `TVALS=0.25 0.5 0.75`, `SEED=2025`), we obtained:
 
-> TODO:
-> - Summarize any new tests (e.g., `tests/test_regression_unit3.py`).
-> - Explain how the tests compare optimized results against baseline “golden” output or known properties.
+| Component | Variant    | Runtime (s) |
+|-----------|------------|------------:|
+| PartA     | baseline   | 164.6       |
+| PartA     | optimized  | 59.2        |
+| PartB     | baseline   | 1.5         |
+| PartC     | baseline   | 57.6        |
+| PartC     | optimized  | 21.9        |
+| All       | baseline   | 223.8       |
+| All       | optimized  | 82.6        |
 
-### 4.2 Comparison of key summaries
+From these numbers:
 
-> TODO:
-> - Provide a short summary of comparisons (e.g., key distances, pooled-Z statistics).
-> - Note if any differences are within Monte Carlo noise.
-> - If there are systematic differences, explain and justify them.
+- **Part A** achieves a ≈ **2.8×** speedup (164.6 → 59.2 s).
+- **Part C** (using 4 workers) achieves a ≈ **2.6×** speedup (57.6 → 21.9 s).
+- **The full pipeline (“All”)** is ≈ **2.7×** faster (223.8 → 82.6 s).
+
+Part B has only a single implementation, so it appears only as “baseline” in the table.
+
+These comparisons are visualised in the bar chart
+
+- `results/figures/perf_components_baseline_vs_optimized.{png,pdf}`,
+
+which annotates each bar with its runtime in seconds.
 
 ---
 
-## 5. Lessons learned
+## 5. Performance visualisations
 
-> TODO: Reflect on:
-> - Which optimizations gave the biggest gains per unit of effort.
-> - Any surprising bottlenecks (e.g., Matplotlib text layout vs actual simulation).
-> - How you might design the simulation differently if starting from scratch with performance in mind.
+We provide two main figures for the Unit-3 report:
+
+1. **Part A runtime vs sample size**  
+   (`results/figures/perf_parta_runtime_vs_n.{png,pdf}`)
+
+   - Shows runtime against $n ∈ \{100, 300, 600, 1000\}$ for both the baseline and optimised Part A CLIs.
+   - Both curves are roughly flat in $n$, confirming that fixed overhead dominates.
+   - The optimised curve lies well below the baseline curve, illustrating the ≈2.8–3× speedup.
+
+2. **Component runtimes: baseline vs optimised**  
+   (`results/figures/perf_components_baseline_vs_optimized.{png,pdf}`)
+
+   - Displays a grouped bar chart for:
+     - Part A (baseline vs optimised),
+     - Part C (baseline vs optimised),
+     - All (baseline vs optimised),
+     plus the single Part B bar.
+   - The chart highlights that the overall speedup is driven by:
+     - algorithmic/array improvements in Part A, and
+     - parallelisation in Part C.
+
+These figures are built automatically by `scripts.plot_performance` and can be regenerated at any time via:
+
+```bash
+make perf-figures
+```
+
+---
+
+## 6. Regression testing and correctness
+
+### 6.1 Existing and new tests
+
+We rely on the existing test suite to provide a baseline level of correctness:
+
+- `tests/test_smoke_parta.py` exercises the Part A CLI on small configurations (including the `n=0` prior panel).
+- `tests/test_smoke_partb.py` and `tests/test_smoke_partc.py` confirm that Part B and Part C CLIs run successfully and produce output files.
+- `tests/test_polya_module.py`, `tests/test_dgp.py`, `tests/test_exchangeability.py`, and `tests/test_repro.py` validate core building blocks such as the Pólya urn implementation, data-generating processes, and reproducibility under fixed seeds.
+
+For Unit 3 we added a **dedicated regression test** for the new parallel Part C implementation:
+
+- `tests/test_regression_unit3.py`  
+
+  - Runs a tiny configuration of `src_cli.partc_log_prop26` **sequentially** and then with `--workers=2`.
+  - Reads both CSVs, sorts them to remove any row-order differences, and checks:
+    - integer / categorical columns (e.g. `rep`, `n`, `covered`) match exactly, and
+    - floating-point columns (e.g. `Pn`, `Vnt`, `Fhat`, `lo`, `hi`, `width`) match to tight tolerance (`atol = 1e-12`).
+
+This regression test can be run on its own via:
+
+```bash
+make regression
+```
+
+and passes in under two seconds on our machine.
+
+### 6.2 Why we do not add a separate numeric regression test for Part A
+
+We did **not** add a second, “baseline vs optimised” numeric regression test for Part A, for two reasons:
+
+1. **The Part A CLI primarily produces *figures*, not stable numeric CSVs.**  
+   The optimisation (trajectory reuse across thresholds) changes only how often we re-simulate Pólya continuations internally; it does **not** change:
+   - the Pólya urn model,
+   - the definition of the posterior quantities, or
+   - the panel layout / plotting logic.
+
+   The most natural outputs to compare would be the PNG/PDF panel images themselves, but tiny numerical differences in Monte Carlo draws (or even Matplotlib version differences) would make “golden image” tests brittle.
+
+2. **The underlying simulation code is already covered by unit tests.**  
+   - The Pólya urn dynamics (`PolyaSequenceModel`, `continue_urn_once`, etc.) are tested in `tests/test_polya_module.py`, `tests/test_exchangeability.py`, and `tests/test_repro.py`.
+   - `tests/test_smoke_parta.py` ensures that the optimised Part A CLI still runs end-to-end and produces the expected figure files for a small configuration.
+
+Given that:
+- the Part A optimisation only reuses trajectories within the CLI,
+- the scientific meaning of the panels is unchanged, and
+- the core stochastic model is already tested directly,
+
+we judged that an additional golden-file regression for Part A would add complexity without much extra protection. Instead, we concentrated the numeric regression effort on Part C, where the new parallel execution path *could* in principle alter results if implemented incorrectly.
+
+---
+
+## 7. Lessons learned
+
+- The **largest performance gains** came from relatively simple structural changes:
+  - Reusing Pólya trajectories across thresholds in Part A (Optimisation 1).
+  - Parallelising independent replications in Part C (Optimisation 2).
+- Profiling revealed that seemingly “obvious” costs (e.g., increasing `n`) were not the real bottlenecks:
+  - In Part A, Matplotlib text layout and fixed overhead dominated; the per-$n$ simulation cost was almost flat over the range we studied.
+  - In Part C, the cost was almost entirely in Pólya continuation (`draw_polya_next`) rather than in I/O or plotting.
+- If we were designing the simulation from scratch with performance in mind, we would:
+  - Separate **simulation** from **plotting** more aggressively (to isolate pure complexity vs $n$).
+  - Design for parallelism from the start (e.g., structuring code so that each replication is a naturally independent task).
+  - Use profiling early in the project to guide optimization, rather than guessing where the bottlenecks might be.
